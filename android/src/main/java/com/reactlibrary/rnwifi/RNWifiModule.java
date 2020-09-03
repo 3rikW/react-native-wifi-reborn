@@ -16,9 +16,9 @@ import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
+import android.net.wifi.WifiNetworkSpecifier;
 import android.os.Build;
 import android.provider.Settings;
-
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresPermission;
@@ -262,12 +262,67 @@ public class RNWifiModule extends ReactContextBaseJavaModule {
      * @param promise  to resolve or reject if connecting worked
      */
     private void connectTo(@NonNull final String SSID, @Nullable final String password, @NonNull final WIFI_ENCRYPTION encryption, @NonNull final Promise promise) {
-        // TODO: Compatibility with Android 10
-        // Note: For now Android 10 still works but in the future, the WifiConfiguration methods are all deprecated.
-        // if (isAndroid10OrLater()) {
-        // 		1) create WifiNetworkSpecifier https://developer.android.com/reference/android/net/wifi/WifiNetworkSpecifier.Builder
-        //		2) create NetworkRequest https://developer.android.com/reference/android/net/NetworkRequest.Builder
-        //      3) connectivityManager.requestNetwork()
+        if(password != null || (password != null && !password.isEmpty())) {
+            promise.reject("not_supported_yet", "This feature is not properly implemented yet. Please implement it for the android 10 tree and properly test before usage.");
+        }
+
+        if (isAndroidTenOrLater()) {
+            final HandlablePromise handlablePromise = new HandlablePromise(promise);
+
+            WifiManager wifi = (WifiManager) context.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if(!wifi.isWifiEnabled()) {
+                handlablePromise.reject("wifi_not_enabled", "Wifi is disabled on the phone");
+                return;
+            }
+
+            final WifiNetworkSpecifier wifiNetworkSpecifier = new WifiNetworkSpecifier.Builder()
+                .setSsid(SSID)
+                .build();
+
+            final NetworkRequest networkRequest = new NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .setNetworkSpecifier(wifiNetworkSpecifier)
+                .build();
+
+            final ConnectivityManager connectivityManager = (ConnectivityManager) context.getApplicationContext().getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (connectivityManager == null) {
+                handlablePromise.reject("connectivityManagerError", "Could not get the ConnectivityManager (SystemService).");
+                return;
+            }
+
+            final ConnectivityManager.NetworkCallback networkCallback = new ConnectivityManager.NetworkCallback() {
+                @Override
+                public void onAvailable(@NonNull Network network) {
+                    super.onAvailable(network);
+                }
+
+                @Override
+                public void onBlockedStatusChanged(@NonNull Network network, boolean blocked) {
+                    super.onBlockedStatusChanged(network, blocked);
+                    if (blocked) {
+                        handlablePromise.reject("connectNetworkFailed", String.format("Connection was blocked, could not connect to network with SSID: %s", SSID));
+                    } else {
+                        handlablePromise.resolve(SSID);
+                    }
+                }
+
+                @Override
+                public void onLost(@NonNull Network network) {
+                    super.onLost(network);
+                    handlablePromise.reject("connectNetworkFailed", String.format("Connection was lost with network with SSID: %s", SSID));
+                }
+
+                @Override
+                public void onUnavailable() {
+                    super.onUnavailable();
+                    handlablePromise.reject("connectNetworkFailed", String.format("Timeout or user cancelled connecting to network with SSID: %s", SSID));
+                }
+            };
+
+            connectivityManager.requestNetwork(networkRequest, networkCallback, 60000);
+            return;
+        }
 
         // create network
         final WifiConfiguration wifiConfiguration = new WifiConfiguration();
@@ -438,14 +493,17 @@ public class RNWifiModule extends ReactContextBaseJavaModule {
      */
     @ReactMethod
     public void getCurrentWifiSSID(final Promise promise) {
+        promise.resolve(getCurrentWifiSSIDString());
+    }
+
+    private String getCurrentWifiSSIDString() {
         WifiInfo info = wifi.getConnectionInfo();
 
         // The bssid check makes sure the nework is actually connected which
         // is sometimes is not during connection processes
         String bssid = info.getBSSID();
         if(bssid != null && bssid.equals("00:00:00:00:00:00")) {
-            promise.resolve("");
-            return;
+            return "";
         }
 
         // This value should be wrapped in double quotes, so we need to unwrap it.
@@ -453,8 +511,7 @@ public class RNWifiModule extends ReactContextBaseJavaModule {
         if (ssid.startsWith("\"") && ssid.endsWith("\"")) {
             ssid = ssid.substring(1, ssid.length() - 1);
         }
-
-        promise.resolve(ssid);
+        return ssid;
     }
 
     /**
@@ -616,8 +673,36 @@ public class RNWifiModule extends ReactContextBaseJavaModule {
     /**
      * @return true if the current sdk is above or equal to Android Q
      */
-    private static boolean isAndroid10OrLater() {
-        return false; // TODO: Compatibility with Android 10
-        // return Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q;
+    private static boolean isAndroidTenOrLater() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q;
+    }
+
+    class HandlablePromise {
+        Promise mPromise;
+        private boolean handled = false;
+
+        HandlablePromise(Promise promise) {
+            this.mPromise = promise;
+        }
+
+        void resolve(@Nullable Object value) {
+            if(!handled) {
+                mPromise.resolve(value);
+                wasHandled();
+            }
+        }
+
+        void reject(String code, String message) {
+            if(!handled) {
+                mPromise.reject(code, message);
+                wasHandled();
+            }
+        }
+
+        private void wasHandled() {
+            handled = true;
+            mPromise = null;
+        }
     }
 }
+
