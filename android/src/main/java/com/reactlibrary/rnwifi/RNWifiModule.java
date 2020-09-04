@@ -254,6 +254,8 @@ public class RNWifiModule extends ReactContextBaseJavaModule {
         return null;
     }
 
+    private ConnectivityManager.NetworkCallback networkCallback = null;
+
     /**
      * Connect with a WIFI network.
      *
@@ -291,7 +293,7 @@ public class RNWifiModule extends ReactContextBaseJavaModule {
                 return;
             }
 
-            final ConnectivityManager.NetworkCallback networkCallback = new ConnectivityManager.NetworkCallback() {
+            networkCallback = new ConnectivityManager.NetworkCallback() {
                 @Override
                 public void onAvailable(@NonNull Network network) {
                     super.onAvailable(network);
@@ -319,7 +321,6 @@ public class RNWifiModule extends ReactContextBaseJavaModule {
                     handlablePromise.reject("connectNetworkFailed", String.format("Timeout or user cancelled connecting to network with SSID: %s", SSID));
                 }
             };
-
             connectivityManager.requestNetwork(networkRequest, networkCallback, 60000);
             return;
         }
@@ -482,8 +483,21 @@ public class RNWifiModule extends ReactContextBaseJavaModule {
      * Disconnect current Wifi.
      */
     @ReactMethod
-    public void disconnect() {
-        wifi.disconnect();
+    public void disconnect(Promise promise) {
+        try {
+            if(isAndroidTenOrLater()) {
+                if(networkCallback != null) {
+                    final ConnectivityManager connectivityManager = (ConnectivityManager) context.getApplicationContext().getSystemService(Context.CONNECTIVITY_SERVICE);
+                    connectivityManager.unregisterNetworkCallback(networkCallback);
+                    networkCallback = null;
+                }
+            } else {
+                wifi.disconnect();
+            }
+            promise.resolve(null);
+        } catch(Exception err) {
+            promise.reject("could_not_disconnect", err.getMessage());
+        }
     }
 
     /**
